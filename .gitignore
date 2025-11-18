@@ -1,0 +1,29 @@
+# Environment variables
+.env
+
+# Virtual environment
+.venv/
+venv/
+env/
+ENV/
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# IDE settings
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Unnecessary code files
+HelloWorldGPT4All.py
+HelloWorldLlamaPython.py
