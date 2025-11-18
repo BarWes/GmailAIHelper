@@ -27,3 +27,7 @@ Thumbs.db
 # Unnecessary code files
 HelloWorldGPT4All.py
 HelloWorldLlamaPython.py
+
+# Credentials
+credentials.json
+token.pickle
