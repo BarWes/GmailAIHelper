@@ -1,4 +1,3 @@
-# test_single_email.py
 import os
 import pickle
 from google.auth.transport.requests import Request
@@ -7,9 +6,58 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 import base64
 import re
+from llama_cpp import Llama
+import sys
+
+# Add model path from env variables
+with open('.env', 'r') as f:
+    for line in f:
+        if line.startswith('MODEL_PATH'):
+            MODEL_PATH = line.strip().split('=')[1]
+            os.environ['MODEL_PATH'] = MODEL_PATH
 
 # define number of emails to go through
 NUMBER_OF_EMAILS = 50
+
+class SuppressOutput:
+    def __enter__(self):
+        self._original_stdout = sys.stdout
+        self._original_stderr = sys.stderr
+        sys.stdout = open(os.devnull, 'w')
+        sys.stderr = open(os.devnull, 'w')
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        sys.stdout.close()
+        sys.stderr.close()
+        sys.stdout = self._original_stdout
+        sys.stderr = self._original_stderr
+
+# Load model silently
+print("Loading model")
+with SuppressOutput():
+    llm = Llama(
+        model_path=MODEL_PATH,
+        n_ctx=2048,
+        n_threads=4,
+        verbose=False
+    )
+print("Model loaded!")
+
+
+def categorizeEmail(subject, body):
+    prompt = f"Categorize this email as Work, Personal, Spam, School, or Bills.\nSubject: {subject}\nBody: {body[:100]}\nCategory:"
+    
+    with SuppressOutput():
+        output = llm(
+            prompt,
+            max_tokens=5,
+            temperature=0.1,
+            stop=["\n", ".", ","],
+            echo=False
+        )
+    
+    return output['choices'][0]['text'].strip()
 
 # If modifying these scopes, delete the file token.pickle
 # For this project I need onlt read permissions from gmail
@@ -105,6 +153,7 @@ messages = results.get('messages', [])
 # In case you found no emails
 if not messages:
     print("No emails found!")
+    exit()
 
 # In case you did
 else:
@@ -154,3 +203,7 @@ else:
         print(f"   From: {email['sender']}")
         print(f"   Body preview: {email['body'][:100]}...")
 
+# Test it with first email
+print("\nTesting LLM:")
+category = categorizeEmail(emails[0]['subject'], emails[0].get('body', ''))
+print(f"Category: {category}")
