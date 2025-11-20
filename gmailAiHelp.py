@@ -8,6 +8,7 @@ import base64
 import re
 from llama_cpp import Llama
 import sys
+import json
 
 # Add model path from env variables
 with open('.env', 'r') as f:
@@ -44,20 +45,93 @@ with SuppressOutput():
     )
 print("Model loaded!")
 
+def analyzeEmailWithLLM(email_data):
+    """Analyze email using LLM."""
 
-def categorizeEmail(subject, body):
-    prompt = f"Categorize this email as Work, Personal, Spam, School, or Bills.\nSubject: {subject}\nBody: {body[:100]}\nCategory:"
-    
+    prompt = f"""You MUST output ONLY valid JSON.
+
+Analyze the following email and fill in this JSON object:
+
+{{
+  "category": "",
+  "priority": "",
+  "needs_response": ""
+}}
+
+Use only the following allowed values:
+
+category = Work, School, Shopping, Social, Finance, Newsletter, Spam, Personal, Other
+priority = Urgent, Important, Normal, Low
+needs_response = Yes, No, Maybe
+
+Email details:
+From: {email_data['sender']}
+Subject: {email_data['subject']}
+Body: {email_data['body'][:300]}
+
+Now return ONLY the JSON object:
+"""
+
+    print("  🤖 Calling LLM...")
     with SuppressOutput():
-        output = llm(
+        raw = llm(
             prompt,
-            max_tokens=5,
+            max_tokens=200,
             temperature=0.1,
-            stop=["\n", ".", ","],
             echo=False
         )
-    
-    return output['choices'][0]['text'].strip()
+
+    if not raw or "choices" not in raw:
+        return {
+            "category": "Other",
+            "priority": "Normal",
+            "needs_response": "Maybe"
+        }
+
+    llm_response = raw["choices"][0]["text"].strip()
+
+    # ---- FIX: Auto-close the JSON if llama cuts early ----
+    # Add a missing "}" if the model forgot it
+    if llm_response.count("{") > llm_response.count("}"):
+        llm_response = llm_response + "}"
+
+    # Add missing field if model returns only 2 of them
+    for field, default in {
+        "category": "Other",
+        "priority": "Normal",
+        "needs_response": "Maybe"
+    }.items():
+        if f"\"{field}\"" not in llm_response:
+            # Safely append
+            llm_response = llm_response.rstrip("}")
+            llm_response += f', "{field}": "{default}"' + "}"
+
+    # Parse JSON
+    try:
+        # Extract ALL JSON objects
+        json_matches = re.findall(r'\{.*?\}', llm_response, re.DOTALL)
+
+        # Nothing found → fallback
+        if not json_matches:
+            raise json.JSONDecodeError("no json", llm_response, 0)
+
+        # Try each JSON object, from LAST to FIRST
+        for candidate in reversed(json_matches):
+            try:
+                return json.loads(candidate)
+            except json.JSONDecodeError:
+                continue
+
+        # If all failed → fallback
+        raise json.JSONDecodeError("all invalid", llm_response, 0)
+
+    except Exception:
+        print(f"  ⚠ Failed to parse: {llm_response[:120]}")
+        return {
+            "category": "Other",
+            "priority": "Normal",
+            "needs_response": "Maybe"
+        }
 
 # If modifying these scopes, delete the file token.pickle
 # For this project I need onlt read permissions from gmail
@@ -203,7 +277,9 @@ else:
         print(f"   From: {email['sender']}")
         print(f"   Body preview: {email['body'][:100]}...")
 
-# Test it with first email
-print("\nTesting LLM:")
-category = categorizeEmail(emails[0]['subject'], emails[0].get('body', ''))
-print(f"Category: {category}")
+print("\nAnalyzing emails...")
+for i, email in enumerate(emails, 1):
+    print(f"\n[{i}/{len(emails)}] {email['subject'][:50]}")
+    analysis = analyzeEmailWithLLM(email)
+    email['analysis'] = analysis
+    print(f"Category: {analysis['category']}, Priority: {analysis['priority']}, Need response: {analysis['needs_response']}")
