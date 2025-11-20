@@ -9,6 +9,31 @@ import re
 from llama_cpp import Llama
 import sys
 import json
+import redis
+import redis
+import hashlib
+
+
+# define number of emails to go through
+NUMBER_OF_EMAILS = 50
+
+REDIS_HOST = "localhost"
+REDIS_PORT = 6379
+CACHE_EXPIRY = 28800  # 8 hours
+
+# Initialize Redis
+try:
+    redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
+    redis_client.ping()
+    print("Connected to Redis")
+except:
+    print("Redis not available")
+    redis_client = None
+
+# Generate cache key based on sender, subject, and first 100 chars of body.
+def get_cache_key(email_data):
+    key_string = f"{email_data['sender']}:{email_data['subject']}:{email_data['body'][:100]}"
+    return hashlib.md5(key_string.encode()).hexdigest()
 
 # Add model path from env variables
 with open('.env', 'r') as f:
@@ -16,9 +41,6 @@ with open('.env', 'r') as f:
         if line.startswith('MODEL_PATH'):
             MODEL_PATH = line.strip().split('=')[1]
             os.environ['MODEL_PATH'] = MODEL_PATH
-
-# define number of emails to go through
-NUMBER_OF_EMAILS = 50
 
 class SuppressOutput:
     def __enter__(self):
@@ -45,8 +67,16 @@ with SuppressOutput():
     )
 print("Model loaded!")
 
+# Analyze the email using the local LLM
 def analyzeEmailWithLLM(email_data):
-    """Analyze email using LLM."""
+
+    # Start by checking the cache
+    cache_key = get_cache_key(email_data)
+    if redis_client:
+        cached = redis_client.get(f"analysis:{cache_key}")
+        if cached:
+            print("Email grabbed from cache")
+            return json.loads(cached)
 
     prompt = f"""You MUST output ONLY valid JSON.
 
@@ -72,7 +102,7 @@ Body: {email_data['body'][:300]}
 Now return ONLY the JSON object:
 """
 
-    print("  🤖 Calling LLM...")
+    print("Calling LLM...")
     with SuppressOutput():
         raw = llm(
             prompt,
@@ -80,17 +110,24 @@ Now return ONLY the JSON object:
             temperature=0.1,
             echo=False
         )
+        
 
     if not raw or "choices" not in raw:
-        return {
+        analysis = {
             "category": "Other",
             "priority": "Normal",
             "needs_response": "Maybe"
         }
+    
+        # if redis is available cache the analysis for use later
+        if redis_client:
+            redis_client.setex(f"analysis:{cache_key}", CACHE_EXPIRY, json.dumps(analysis))
+
+        return analysis
 
     llm_response = raw["choices"][0]["text"].strip()
 
-    # ---- FIX: Auto-close the JSON if llama cuts early ----
+    # Auto close the JSON if llama cuts early
     # Add a missing "}" if the model forgot it
     if llm_response.count("{") > llm_response.count("}"):
         llm_response = llm_response + "}"
@@ -102,12 +139,14 @@ Now return ONLY the JSON object:
         "needs_response": "Maybe"
     }.items():
         if f"\"{field}\"" not in llm_response:
+            
             # Safely append
             llm_response = llm_response.rstrip("}")
             llm_response += f', "{field}": "{default}"' + "}"
 
     # Parse JSON
     try:
+        
         # Extract ALL JSON objects
         json_matches = re.findall(r'\{.*?\}', llm_response, re.DOTALL)
 
@@ -118,7 +157,17 @@ Now return ONLY the JSON object:
         # Try each JSON object, from LAST to FIRST
         for candidate in reversed(json_matches):
             try:
-                return json.loads(candidate)
+                analysis = json.loads(candidate)
+
+                # Save result to Redis
+                if redis_client:
+                    redis_client.setex(
+                        f"analysis:{cache_key}",
+                        CACHE_EXPIRY,
+                        json.dumps(analysis)
+                    )
+
+                return analysis
             except json.JSONDecodeError:
                 continue
 
