@@ -6,6 +6,9 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
+# define number of emails to go through
+NUMBER_OF_EMAILS = 50
+
 # If modifying these scopes, delete the file token.pickle
 # For this project I need onlt read permissions from gmail
 SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
@@ -54,46 +57,54 @@ print("Step 1: Connecting to Gmail")
 service = getGmailService()
 print("Connected successfully!")
 
-# Get list of messages (just 1)
-print("\nStep 2: Getting most recent email ID")
-results = service.users().messages().list(userId='me', maxResults=1).execute()
+# Get list of messages
+print(f"\nStep 2: Getting most recent {NUMBER_OF_EMAILS} emails IDs")
+results = service.users().messages().list(userId='me', maxResults=NUMBER_OF_EMAILS).execute()
 messages = results.get('messages', [])
 
+# In case you found no emails
 if not messages:
     print("No emails found!")
 
+# In case you did
 else:
-    # Get the first message ID
-    msg_id = messages[0]['id']
-    print(f"Found email with ID: {msg_id}")
+
+    # Getting most recent 50 emails
+    # LIST lists them but doesnt actually return the emails themselves
+    # We need this for the email IDs
+    results = service.users().messages().list(userId='me', maxResults=NUMBER_OF_EMAILS).execute()
+    messages = results.get('messages', [])
     
-    # Get the full message details
-    print("\nStep 3: Fetching email details...")
-    message = service.users().messages().get(userId='me', id=msg_id, format='full').execute()
-    print("Email fetched!")
-    
-    # Extract headers
-    print("\nStep 4: Extracting email information...")
-    headers = message['payload']['headers']
-    
-    subject = None
-    sender = None
-    date = None
-    
-    for header in headers:
-        if header['name'] == 'Subject':
-            subject = header['value']
-        elif header['name'] == 'From':
-            sender = header['value']
-        elif header['name'] == 'Date':
-            date = header['value']
-    
-    # Get snippet (preview text)
-    snippet = message.get('snippet', '')
-    
-    # Print everything nicely
-    print("MOST RECENT EMAIL:")
-    print(f"From: {sender}")
-    print(f"Date: {date}")
-    print(f"Subject: {subject}")
-    print(f"\nPreview: {snippet[:200]}...")
+    # Create a list to hold all the emails
+    emails = []
+
+    # Run over the data fetched from the gmail api
+    for i, msg in enumerate(messages):
+
+        # Get a single message id from the list
+        msg_id = msg['id']
+        print(f"[{i+1}/{len(messages)}] Fetching email {msg_id}", end='\r')
+        
+        # Get the full message details through the id we got before
+        message = service.users().messages().get(userId='me', id=msg['id'], format='full').execute()
+        
+        # Extract headers
+        headers = message['payload']['headers']
+        subject = next((h['value'] for h in headers if h['name'] == 'Subject'), 'No Subject')
+        sender = next((h['value'] for h in headers if h['name'] == 'From'), 'Unknown')
+        date = next((h['value'] for h in headers if h['name'] == 'Date'), '')
+        
+        emails.append({
+            'subject': subject,
+            'sender': sender,
+            'date': date
+        })
+
+
+    print("\n")
+    print(f"Fetched {len(emails)} emails")
+
+    # Print first 5 as test
+    for i, email in enumerate(emails[:5], 1):
+        print(f"\n{i}. {email['subject']}")
+        print(f"   From: {email['sender']}")
