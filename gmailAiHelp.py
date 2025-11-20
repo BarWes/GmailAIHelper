@@ -5,6 +5,8 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
+import base64
+import re
 
 # define number of emails to go through
 NUMBER_OF_EMAILS = 50
@@ -12,6 +14,44 @@ NUMBER_OF_EMAILS = 50
 # If modifying these scopes, delete the file token.pickle
 # For this project I need onlt read permissions from gmail
 SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
+
+# Extract email body from payload
+def getEmailBody(payload):
+
+    body = ""
+    
+    # Check if email has multiple parts (multipart email)
+    if 'parts' in payload:
+        for part in payload['parts']:
+
+            # Try to get plain text first
+            if part['mimeType'] == 'text/plain':
+                if 'data' in part['body']:
+                    body = base64.urlsafe_b64decode(part['body']['data']).decode('utf-8')
+                    break
+
+            # If no plain text, get HTML and strip tags manually
+            elif part['mimeType'] == 'text/html' and not body:
+                if 'data' in part['body']:
+                    html = base64.urlsafe_b64decode(part['body']['data']).decode('utf-8')
+
+                    # Simple regex to remove HTML tags
+                    body = re.sub(r'<[^>]+>', '', html)
+    else:
+        
+        # Single part email
+        if 'data' in payload['body']:
+            data = base64.urlsafe_b64decode(payload['body']['data']).decode('utf-8')
+            
+            # If it looks like HTML, strip tags
+            if '<html' in data.lower() or '<body' in data.lower():
+                body = re.sub(r'<[^>]+>', '', data)
+            else:
+                body = data
+    
+    # Clean whitespace and truncate
+    body = re.sub(r'\s+', ' ', body).strip()
+    return body[:500]
 
 def getGmailService():
     credentials = None
@@ -93,11 +133,15 @@ else:
         subject = next((h['value'] for h in headers if h['name'] == 'Subject'), 'No Subject')
         sender = next((h['value'] for h in headers if h['name'] == 'From'), 'Unknown')
         date = next((h['value'] for h in headers if h['name'] == 'Date'), '')
+
+        # Extract body using the function
+        body = getEmailBody(message['payload'])
         
         emails.append({
             'subject': subject,
             'sender': sender,
-            'date': date
+            'date': date,
+            'body': body
         })
 
 
@@ -108,3 +152,5 @@ else:
     for i, email in enumerate(emails[:5], 1):
         print(f"\n{i}. {email['subject']}")
         print(f"   From: {email['sender']}")
+        print(f"   Body preview: {email['body'][:100]}...")
+
