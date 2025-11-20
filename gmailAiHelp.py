@@ -13,7 +13,6 @@ import redis
 import redis
 import hashlib
 
-
 # define number of emails to go through
 NUMBER_OF_EMAILS = 50
 
@@ -181,6 +180,23 @@ Now return ONLY the JSON object:
             "priority": "Normal",
             "needs_response": "Maybe"
         }
+    
+# Helper function to cache emails
+def cacheEmail(email_id, email_data):
+    if redis_client:
+        redis_client.setex(
+            f"email:{email_id}",
+            CACHE_EXPIRY,   # same expiry (8 hours)
+            json.dumps(email_data)
+        )
+
+# Helper function see if an email is already cached
+def getCahcedEmail(email_id):
+    if redis_client:
+        data = redis_client.get(f"email:{email_id}")
+        if data:
+            return json.loads(data)
+    return None
 
 # If modifying these scopes, delete the file token.pickle
 # For this project I need onlt read permissions from gmail
@@ -296,6 +312,15 @@ else:
         # Get a single message id from the list
         msg_id = msg['id']
         print(f"[{i+1}/{len(messages)}] Fetching email {msg_id}", end='\r')
+
+        # Try redis first
+        cached = None
+        if redis_client:
+            cached_data = redis_client.get(f"email:{msg_id}")
+            if cached_data:
+                cached = json.loads(cached_data)
+                emails.append(cached)
+                continue  # skip Gmail API
         
         # Get the full message details through the id we got before
         message = service.users().messages().get(userId='me', id=msg['id'], format='full').execute()
@@ -309,13 +334,23 @@ else:
         # Extract body using the function
         body = getEmailBody(message['payload'])
         
-        emails.append({
+        email_data = {
+            'id': msg_id,
             'subject': subject,
             'sender': sender,
             'date': date,
             'body': body
-        })
+        }
 
+        emails.append(email_data)
+
+        # Cache the email you found
+        if redis_client:
+            redis_client.setex(
+                f"email:{msg_id}",
+                CACHE_EXPIRY,
+                json.dumps(email_data)
+            )
 
     print("\n")
     print(f"Fetched {len(emails)} emails")
