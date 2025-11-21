@@ -12,9 +12,12 @@ import json
 import redis
 import redis
 import hashlib
+import matplotlib.pyplot as plt
+from collections import Counter
+from datetime import datetime
 
 # define number of emails to go through
-NUMBER_OF_EMAILS = 50
+NUMBER_OF_EMAILS = 10
 
 REDIS_HOST = "localhost"
 REDIS_PORT = 6379
@@ -75,8 +78,20 @@ def analyzeEmailWithLLM(email_data):
         cached = redis_client.get(f"analysis:{cache_key}")
         if cached:
             print("Email grabbed from cache")
-            return json.loads(cached)
+            analysis = json.loads(cached)
 
+            # FORCE ALL FIELDS TO EXIST
+            defaults = {
+                "category": "Other",
+                "priority": "Normal",
+                "needs_response": "Maybe"
+            }
+            for field, default in defaults.items():
+                if field not in analysis or not analysis[field]:
+                    analysis[field] = default
+
+            return analysis
+    
     prompt = f"""You MUST output ONLY valid JSON.
 
 Analyze the following email and fill in this JSON object:
@@ -158,6 +173,17 @@ Now return ONLY the JSON object:
             try:
                 analysis = json.loads(candidate)
 
+                # FORCE ALL FIELDS TO EXIST
+                defaults = {
+                    "category": "Other",
+                    "priority": "Normal",
+                    "needs_response": "Maybe"
+                }
+
+                for field, default in defaults.items():
+                    if field not in analysis or not analysis[field]:
+                        analysis[field] = default
+
                 # Save result to Redis
                 if redis_client:
                     redis_client.setex(
@@ -170,11 +196,11 @@ Now return ONLY the JSON object:
             except json.JSONDecodeError:
                 continue
 
-        # If all failed → fallback
+        # If all failed, fallback
         raise json.JSONDecodeError("all invalid", llm_response, 0)
 
     except Exception:
-        print(f"  ⚠ Failed to parse: {llm_response[:120]}")
+        print(f"Failed to parse: {llm_response[:120]}")
         return {
             "category": "Other",
             "priority": "Normal",
@@ -197,6 +223,65 @@ def getCahcedEmail(email_id):
         if data:
             return json.loads(data)
     return None
+
+def show_charts(emails):
+    
+    # Extract analysis fields
+    categories = [e["analysis"]["category"] for e in emails]
+    responses  = [e["analysis"]["needs_response"] for e in emails]
+    senders    = [e["sender"] for e in emails]
+
+    # Pie chart of emails per category
+    plt.figure()
+    category_counts = Counter(categories)
+    plt.pie(
+        category_counts.values(),
+        labels=category_counts.keys(),
+        autopct="%1.1f%%"
+    )
+    plt.title("Email Categories Distribution")
+    plt.show()
+
+    # Need response bar chart
+    plt.figure()
+    response_counts = Counter(responses)
+    plt.bar(response_counts.keys(), response_counts.values())
+    plt.title("Emails That Require a Response")
+    plt.xlabel("Needs Response")
+    plt.ylabel("Count")
+    plt.show()
+
+    # Top senders
+    plt.figure()
+    sender_counts = Counter(senders).most_common(10)
+    senders_list, counts_list = zip(*sender_counts)
+    plt.barh(senders_list, counts_list)
+    plt.title("Top 10 Senders")
+    plt.xlabel("Number of emails")
+    plt.show()
+
+    # Emails over time
+    # Try parsing dates if they exist
+    dates = []
+    for e in emails:
+        try:
+            parsed = datetime.strptime(e["date"][:16], "%a, %d %b %Y")
+            dates.append(parsed.date())
+        except:
+            continue  # skip if date parsing fails
+
+    if dates:
+        plt.figure()
+        date_counts = Counter(dates)
+        # sort by date
+        d, c = zip(*sorted(date_counts.items()))
+        plt.plot(d, c)
+        plt.title("Emails Over Time")
+        plt.xlabel("Date")
+        plt.ylabel("Email Count")
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+        plt.show()
 
 # If modifying these scopes, delete the file token.pickle
 # For this project I need onlt read permissions from gmail
@@ -355,15 +440,10 @@ else:
     print("\n")
     print(f"Fetched {len(emails)} emails")
 
-    # Print first 5 as test
-    for i, email in enumerate(emails[:5], 1):
-        print(f"\n{i}. {email['subject']}")
-        print(f"   From: {email['sender']}")
-        print(f"   Body preview: {email['body'][:100]}...")
-
 print("\nAnalyzing emails...")
 for i, email in enumerate(emails, 1):
     print(f"\n[{i}/{len(emails)}] {email['subject'][:50]}")
     analysis = analyzeEmailWithLLM(email)
     email['analysis'] = analysis
     print(f"Category: {analysis['category']}, Priority: {analysis['priority']}, Need response: {analysis['needs_response']}")
+show_charts(emails)
