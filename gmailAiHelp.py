@@ -17,7 +17,7 @@ from collections import Counter
 from datetime import datetime
 
 # define number of emails to go through
-NUMBER_OF_EMAILS = 10
+NUMBER_OF_EMAILS = 50
 
 REDIS_HOST = "localhost"
 REDIS_PORT = 6379
